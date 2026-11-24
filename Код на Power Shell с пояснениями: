@@ -1,0 +1,238 @@
+# Путь к источнику и назначению  
+$sourcePath = "HKLM:\SOFTWARE\Microsoft\Speech_OneCore\Voices\Tokens"  
+$destinationPath = "HKLM:\SOFTWARE\Microsoft\Speech\Voices\Tokens"  
+
+# Проверяем, существует ли источник  
+if (Test-Path $sourcePath) {  
+    # Получаем все языковые пакеты из источника  
+    $voiceTokens = Get-Item -Path $sourcePath  
+
+    # Перебираем каждый токен  
+    foreach ($token in $voiceTokens.GetSubKeyNames()) {  
+        $sourceTokenPath = Join-Path -Path $sourcePath -ChildPath $token  
+
+        # Формируем новое имя токена  
+        if ($token -match '^MSTTS_V110_(.+?)_(.+)$') {  
+            $languageCode = $matches[1].ToUpper()  # Меняем код языка на верхний регистр  
+            $speakerName = $matches[2].ToUpper()  # Меняем имя говорящего на верхний регистр  
+
+            # Удаляем все заглавные буквы "M" в конце имени говорящего  
+            while ($speakerName.EndsWith("M")) {  
+                $speakerName = $speakerName.Substring(0, $speakerName.Length - 1)  
+            }  
+
+            # Разделяем язык на две части и вставляем "-"  
+            if ($languageCode.Length -eq 4) {  
+                $languagePart1 = $languageCode.Substring(0, 2)  
+                $languagePart2 = $languageCode.Substring(2, 2)  
+                $languageCodeFormatted = "$languagePart1-$languagePart2"  
+            } else {  
+                $languageCodeFormatted = $languageCode  # На случай, если длина не 4  
+            }  
+
+            $version = "11.0"  # Номер версии  
+
+            # Формируем окончательное имя  
+            $newTokenName = "TTS_MS_$languageCodeFormatted`_$speakerName`_$version"  
+
+            $destinationTokenPath = Join-Path -Path $destinationPath -ChildPath $newTokenName  
+
+            # Проверяем, существует ли токен в назначении  
+            if (-not (Test-Path $destinationTokenPath)) {  
+                # Копируем токен в назначение с новым именем  
+                Copy-Item -Path $sourceTokenPath -Destination $destinationPath -Recurse -Force  
+                Rename-Item -Path (Join-Path -Path $destinationPath -ChildPath $token) -NewName $newTokenName  
+                Write-Host "Перенесено: $token как $newTokenName"  
+
+                # Проверяем и копируем атрибуты (если существуют)  
+                $sourceAttributesPath = Join-Path -Path $sourceTokenPath -ChildPath "Attributes"  
+                $destinationAttributesPath = Join-Path -Path $destinationTokenPath -ChildPath "Attributes"  
+
+                if (Test-Path $sourceAttributesPath) {  
+                    # Копируем атрибуты в назначение  
+                    Copy-Item -Path $sourceAttributesPath -Destination $destinationTokenPath -Recurse -Force  
+                    Write-Host "Атрибуты перенесены для токена: $newTokenName"  
+                } else {  
+                    Write-Host "Атрибуты не найдены для токена: $newTokenName"  
+                }  
+            } else {  
+                Write-Host "Токен $newTokenName уже существует в назначении. Пропуск."  
+            }  
+        } else {  
+            Write-Host "Не удалось обработать токен: $token"  
+        }  
+    }  
+
+    Write-Host "Перемещение языковых пакетов завершено."  
+
+    # Проверка и обновление параметров VoicePath и LangDataPath для существующего или нового токена  
+    $destinationSubKeys = Get-ChildItem -Path $destinationPath  
+
+    foreach ($subKey in $destinationSubKeys) {  
+        # Получаем свойства токена  
+        $properties = Get-ItemProperty -Path $subKey.PSPath  
+
+        # Проверяем и обновляем VoicePath  
+        if ($properties.PSObject.Properties["VoicePath"]) {  
+            $currentVoicePath = $properties.VoicePath  
+            $newVoicePath = $currentVoicePath -replace "_OneCore", ""  
+            Set-ItemProperty -Path $subKey.PSPath -Name "VoicePath" -Value $newVoicePath  
+            Write-Host "Обновлен VoicePath для токена $($subKey.PSChildName): $newVoicePath"  
+        }  
+
+        # Проверяем и обновляем LangDataPath  
+        if ($properties.PSObject.Properties["LangDataPath"]) {  
+            $currentLangDataPath = $properties.LangDataPath  
+            $newLangDataPath = $currentLangDataPath -replace "_OneCore", ""  
+            Set-ItemProperty -Path $subKey.PSPath -Name "LangDataPath" -Value $newLangDataPath  
+            Write-Host "Обновлен LangDataPath для токена $($subKey.PSChildName): $newLangDataPath"  
+        }  
+    }  
+
+    Write-Host "Обновление параметров языковых пакетов завершено."  
+} else {  
+    Write-Host "Источник не найден: $sourcePath"  
+}  
+ 
+# Получаем все подкаталоги  
+$subKeys = Get-ChildItem -Path $destinationPath  
+
+foreach ($subKey in $subKeys) {  
+    # Получаем свойства текущего подкаталога  
+    $properties = Get-ItemProperty -Path $subKey.PSPath  
+
+    # Получаем имена параметров  
+    $propertyNames = $properties.PSObject.Properties.Name  
+
+    # Обрабатываем только первые два свойства  
+    for ($i = 0; $i -lt [math]::Min(2, $propertyNames.Count); $i++) {  
+        $currentName = $propertyNames[$i]  
+        $currentValue = $properties.$currentName  
+        
+        # Проверка на наличие слова "Desktop"  
+        if ($currentValue -notlike "*Desktop*") {  
+            # Счетчик пробелов  
+            $spaceCount = 0  
+            $newValue = ""  
+
+            # Обход каждого символа в строке  
+            foreach ($char in $currentValue.ToCharArray()) {  
+                if ($char -eq ' ') {  
+                    $spaceCount++  
+                    # Добавляем символ пробела  
+                    $newValue += $char  
+                    # Проверяем, достигли ли мы второго пробела  
+                    if ($spaceCount -eq 2) {  
+                        $newValue += "Desktop " # Добавляем "Desktop" после второго пробела  
+                    }  
+                } else {  
+                    # Добавляем текущий символ, если это не пробел  
+                    $newValue += $char  
+                }  
+            }  
+
+            # Обновляем значение параметра, если оно изменилось  
+            if ($currentValue -ne $newValue) {  
+                Set-ItemProperty -Path $subKey.PSPath -Name $currentName -Value $newValue  
+                Write-Host "Обновлено значение '$currentName' для токена $($subKey.PSChildName): $newValue"  
+            }  
+        }  
+    }  
+}  
+
+Write-Host "Обновление параметров для всех разделов завершено."  
+
+# Проверяем, существует ли назначение  
+if (Test-Path $destinationPath) {  
+    # Получаем все токены голосов из назначения  
+    $voiceTokens = Get-Item -Path $destinationPath  
+
+    # Перебираем каждый токен  
+    foreach ($token in $voiceTokens.GetSubKeyNames()) {  
+        $tokenPath = Join-Path -Path $destinationPath -ChildPath $token  
+        $attributesPath = Join-Path -Path $tokenPath -ChildPath "Attributes"  
+
+        # Проверяем, существует ли раздел Attributes  
+        if (Test-Path $attributesPath) {  
+            # Проверяем и удаляем параметр DataVersion, если он существует  
+            $dataVersionProperty = Get-ItemProperty -Path $attributesPath -Name "DataVersion" -ErrorAction SilentlyContinue  
+            if ($dataVersionProperty) {  
+                Remove-ItemProperty -Path $attributesPath -Name "DataVersion"  
+                Write-Host "Параметр DataVersion удален для токена: $token"  
+            } else {  
+                Write-Host "Параметр DataVersion не найден для токена: $token"  
+            }  
+
+            # Проверяем и удаляем параметр SayAsSupport, если он существует  
+            $sayAsSupportProperty = Get-ItemProperty -Path $attributesPath -Name "SayAsSupport" -ErrorAction SilentlyContinue  
+            if ($sayAsSupportProperty) {  
+                Remove-ItemProperty -Path $attributesPath -Name "SayAsSupport"  
+                Write-Host "Параметр SayAsSupport удален для токена: $token"  
+            } else {  
+                Write-Host "Параметр SayAsSupport не найден для токена: $token"  
+            }  
+
+            # Проверяем параметр Name  
+            $nameProperty = Get-ItemProperty -Path $attributesPath -Name "Name" -ErrorAction SilentlyContinue  
+            if ($nameProperty) {  
+                $nameValue = $nameProperty.Name  
+
+                # Проверяем, нет ли уже суффикса " Desktop" в параметре Name  
+                if (-not $nameValue.EndsWith(" Desktop")) {  
+                    $newNameValue = "$nameValue Desktop"  
+                    Set-ItemProperty -Path $attributesPath -Name "Name" -Value $newNameValue  
+                    Write-Host "Добавлен суффикс ' Desktop' к параметру Name для токена: $token"  
+                }  
+            } else {  
+                Write-Host "Параметр Name не найден для токена: $token"  
+            }  
+
+            # Проверяем и добавляем параметр SharedPronunciation, если его нет  
+            $sharedPronunciationProperty = Get-ItemProperty -Path $attributesPath -Name "SharedPronunciation" -ErrorAction SilentlyContinue  
+            if (-not $sharedPronunciationProperty) {  
+                New-ItemProperty -Path $attributesPath -Name "SharedPronunciation" -Value "" -PropertyType String -Force  
+                Write-Host "Добавлен параметр SharedPronunciation с пустым значением для токена: $token"  
+            } else {  
+                Write-Host "Параметр SharedPronunciation уже существует для токена: $token"  
+            }  
+        } else {  
+            Write-Host "Раздел Attributes не найден для токена: $token"  
+        }  
+    }  
+
+    # Обработка параметра SpLexicon  
+    # Определение путей к исходному ключу  
+    $sourcePath = "HKLM:\SOFTWARE\Microsoft\Speech\Voices\Tokens\TTS_MS_RU-RU_IRINA_11.0\Attributes"  
+
+    # Извлечение значения SpLexicon из исходного ключа  
+    $spLexiconValue = Get-ItemProperty -Path $sourcePath -Name "SpLexicon" -ErrorAction SilentlyContinue  
+
+    # Проверка, было ли значение успешно получено  
+    if ($spLexiconValue -ne $null) {  
+        $spLexiconValue = $spLexiconValue.SpLexicon  
+        Write-Host "Значение SpLexicon получено: $spLexiconValue"  
+        
+        # Получение списка всех ключей в Tokens  
+        $subKeys = Get-ChildItem -Path $destinationPath  
+
+        foreach ($key in $subKeys) {  
+            $keyPath = "$destinationPath\$($key.PSChildName)\Attributes"  
+            # Проверка существования SpLexicon в текущем ключе  
+            $existingValue = Get-ItemProperty -Path $keyPath -Name "SpLexicon" -ErrorAction SilentlyContinue  
+            
+            if ($existingValue -eq $null) {  
+                # Установка SpLexicon в текущем ключе  
+                Set-ItemProperty -Path $keyPath -Name "SpLexicon" -Value $spLexiconValue -Type String  
+                Write-Host "Добавлен параметр SpLexicon в '$keyPath'."  
+            } else {  
+                Write-Host "Параметр SpLexicon уже существует в '$keyPath'."  
+            }  
+        }  
+    } else {  
+        Write-Host "Параметр SpLexicon не найден в '$sourcePath'."  
+    }  
+
+    Write-Host "Обработка токенов завершена."  
+} else {  
+    Write-Host "Назначение не найдено: $destinationPath"  
+}  
